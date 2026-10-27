@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Adblock4limbo.[github]
 // @namespace    https://github.com/limbopro/Adblock4limbo/raw/main/Adguard/Adblock4limbo.user.js
-// @version      0.2026.10.24
+// @version      0.2026.10.24.1
 // @license      CC BY-NC-SA 4.0
 // @description  毒奶去网页广告计划用户脚本 For Quantumult X & Surge & Shadowrocket & Loon & Stash & 油猴 ；1.新增页面右下角导航；2.通过 JavaScript 移除特定网站网页广告 —— 搜索引擎（Bing/Google）广告及内容农场结果清除/低端影视/欧乐影院/iyf爱壹帆/哔滴影视/Pornhub/Javbus/Supjav/Jable(支持抓取M3U8链接)/MissAv/Njav/91porn(支持视频下载)/hitomi/紳士漫畫/禁漫天堂/等视频&ACG&小说&漫画网站上的弹窗广告&视频广告&Gif图片广告等，保持网页清爽干净无打扰！ P.S. 欢迎提交issue
 // @author       limbopro
@@ -52,6 +52,10 @@
 // @match        *://*.jable1.net/*
 // @match        *://*.jable1.art/*
 // @match        *://*.jable1.nl/*
+// @match        *://*.9953hsck.cc/*
+// @match        *://*.9956hsck.cc/*
+// @match        *://*.9957hsck.cc/*
+// @match        *://*.9958hsck.cc/*
 // @match        https://missav.com/*
 // @match        https://missav.ai/*
 // @match        https://missav.ws/*
@@ -179,6 +183,14 @@
 // @run-at       document-end
 // @grant        none
 // ==/UserScript==
+/**
+ * ⚠️ 通配子域写法提示（实测 Chrome match pattern 语义，Chrome 155 registerContentScripts 验证）
+ *   https://*.host/*  → 匹配该域任意子域（含裸域）的【所有路径】 ✅ 推荐
+ *   https://*.host/   → 只匹配站点根路径 "/"，进入任何子页面（如 /v/123）都不会触发 ❌
+ * 因此在 Tampermonkey「用户匹配 / User Matches」里补前缀规则时，务必以 /* 结尾；
+ * 本脚本自 v0.2026.10.24.1 起，也可直接在脚本内用 A4L_prefixMatch 支持的
+ * "*://*.host/*" 形式配置，无需再改 TM 的用户匹配。
+ */
 // 为避免不必要的麻烦，Adblock4limbo.user.js 只匹配以上 @match 部分网站；
 // 🤔如需在所有网站应用本脚本及其自带“导航功能”，
 // ✅建议直接安装导航功能脚本 https://github.com/limbopro/Adblock4limbo/raw/refs/heads/main/Adguard/Adblock4limbo.function.user.js （Adblock4limbo——导航及各类功能函数合集.[github]）
@@ -450,6 +462,41 @@ loadCSS(adsMax.css.weblistads, () => {
 
 css_adsRemove(adsMax.css.othercss, 0, 'othercss') // 引用全局样式
 
+/**
+ * A4L_prefixMatch - 支持网址前缀/通配子域匹配
+ * 支持规则形式：
+ *   1. 纯域名片段（旧格式，向后兼容）："91porn.com" → url.indexOf 命中即匹配
+ *   2. 通配子域："https://*.9957hsck.cc/*" 或 "*://*.9957hsck.cc/*" → 匹配该域任意子域（含裸域）任意路径
+ *   3. 精确主机前缀："https://9957hsck.cc/path" → 仅该主机下、以 /path 开头的 URL
+ * 实现：把规则转成锚定正则（host 的 前导"*. " 段转 ([^/]*\.)?，其余 * 转 .*，/ 起 path 段转前缀匹配），
+ * 避免把规则当成普通字符串 indexOf（旧逻辑会在任意子串命中，如 evil.com/#9957hsck.cc 误匹配）。
+ */
+window.A4L_prefixMatch = function (pattern, url) {
+    if (!pattern || !url) return false;
+    pattern = String(pattern).trim();
+    url = String(url).trim();
+    // 无 scheme（纯域名片段）→ 保持 indexOf 旧语义（向后兼容 adsDomain 里全部旧条目）
+    if (!/^(https?:)?\/\//i.test(pattern) && !/^\*?:\/\//i.test(pattern)) {
+        return url.indexOf(pattern) !== -1;
+    }
+    // 解析  scheme://rest
+    var m = pattern.match(/^(?:\*|https?|ws):\/\/(.+)$/i);
+    if (!m) return url.indexOf(pattern) !== -1; // 无法解析则回退
+    var rest = m[1];
+    var slash = rest.indexOf('/');
+    var host = slash >= 0 ? rest.slice(0, slash) : rest;
+    var path = slash >= 0 ? rest.slice(slash) : '';
+    function esc(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+    // host 通配
+    var hostRe = esc(host);
+    hostRe = hostRe.replace(/^\\\*\\\./, '([^/]*\\.)?'); // 前导 "*. " -> 可选子域
+    hostRe = hostRe.replace(/\\\*/g, '[^/]*');           // 其余 * -> 非斜杠段
+    // path 前缀
+    var pathRe = esc(path).replace(/\\\*/g, '.*');
+    var re = new RegExp('^https?://' + hostRe + (pathRe ? pathRe : '.*'), 'i');
+    return re.test(url);
+};
+
 function values() {
     var adsDomain = [
         "pornhub",
@@ -548,13 +595,19 @@ function values() {
         'diyibanzhu',
         'alicesw',
         'hltv',
-        "zhihu"
+        "zhihu",
+        // A4L 新增：支持网址前缀/通配子域匹配（A4L_prefixMatch 解析 scheme://host/path 形式）
+        // *.host 通配子域：命中该域任意子域（含裸域）任意路径，替代 TM User Matches 里逐个枚举精确主机
+        "*://*.9953hsck.cc/*",
+        "*://*.9956hsck.cc/*",
+        "*://*.9957hsck.cc/*",
+        "*://*.9958hsck.cc/*"
     ]
     var url = document.location.href;
     console.log("URL : " + url); // 看看当前 URL
     var i;
     for (i = 0; i < adsDomain.length; i++) {
-        if (url.indexOf(adsDomain[i]) !== -1) {
+        if (window.A4L_prefixMatch(adsDomain[i], url)) {
             var values = adsDomain[i]; // 释放参数值
             console.log("Catch it : " + values) // 看看控制台输出了个啥
         }
